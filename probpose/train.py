@@ -1,11 +1,13 @@
-import torch
+from pathlib import Path
+
 import numpy as np
+import torch
+
+from probpose.backbone import make_radio_backbone
 from probpose.codec import Codec
+from probpose.dataset import YOLOPoseDataset
 from probpose.head import ProbMapHead
 from probpose.loss import ProbPoseLoss
-from probpose.dataset import YOLOPoseDataset
-from probpose.backbone import make_radio_backbone
-from pathlib import Path
 
 if __name__ == "__main__":
     backbone = make_radio_backbone("radio_v2.5-b")

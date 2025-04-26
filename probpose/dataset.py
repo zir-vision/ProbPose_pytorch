@@ -3,16 +3,18 @@ Convert YOLO Pose format annotations to COCO format.
 """
 
 from pathlib import Path
+
+import numpy as np
+import PIL
 import PIL.Image
-from rich.progress import track
 import pymage_size
 import torch
-import numpy as np
+from rich.progress import track
 from torch.utils.data import Dataset
-import PIL
 from torchvision.transforms import v2
-from probpose.util import ProbPoseGroundTruth
+
 from probpose.codec import Codec
+from probpose.util import ProbPoseGroundTruth
 
 
 def parse_annotations(split_folder: Path, target_single_class: int | None = None):

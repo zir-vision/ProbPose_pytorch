@@ -1,10 +1,10 @@
 from itertools import product
+
 import numpy as np
 from torch import Tensor
 
-from probpose.util import to_numpy
-
 from probpose.heatmap import get_heatmap_expected_value
+from probpose.util import to_numpy
 
 
 def generate_probmaps(

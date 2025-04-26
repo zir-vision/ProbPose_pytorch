@@ -1,6 +1,7 @@
+from dataclasses import dataclass
+
 import numpy as np
 from torch import Tensor
-from dataclasses import dataclass
 
 
 def to_numpy(tensor: Tensor) -> np.ndarray:

@@ -1,9 +1,11 @@
 from functools import partial
 from typing import Sequence
-from torch import nn, Tensor
+
+import numpy as np
 import torch
 import torch.nn.functional as F
-import numpy as np
+from torch import Tensor, nn
+
 from probpose.codec import Codec
 from probpose.heatmap import (
     _calc_distances,

@@ -1,10 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from itertools import product
 from typing import Optional, Tuple
 
 import cv2
 import numpy as np
-from itertools import product
-
 import torch
 import torch.nn.functional as F
 

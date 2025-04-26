@@ -1,9 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import Sequence, Tuple, Union
 
+import numpy as np
 import torch
 from torch import Tensor, nn
-import numpy as np
+
 from probpose.util import to_numpy
 
 try:
