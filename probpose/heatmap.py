@@ -11,7 +11,6 @@ import torch.nn.functional as F
 from probpose.util import to_numpy
 
 
-
 def get_heatmap_maximum(heatmaps: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """Get maximum response location and value from heatmaps.
 
@@ -52,6 +51,7 @@ def get_heatmap_maximum(heatmaps: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         vals = vals.reshape(B, K)
 
     return locs, vals
+
 
 def _calc_distances(
     preds: np.ndarray, gts: np.ndarray, mask: np.ndarray, norm_factor: np.ndarray
@@ -195,9 +195,11 @@ def _prepare_oks_kernels(K, H, W, kpt_sigmas: np.ndarray):
     return kernels
 
 
-
 def get_heatmap_expected_value(
-    heatmaps: np.ndarray, sigmas: np.ndarray, parzen_size: float = 0.1, return_heatmap: bool = False,
+    heatmaps: np.ndarray,
+    sigmas: np.ndarray,
+    parzen_size: float = 0.1,
+    return_heatmap: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Get maximum response location and value from heatmaps.
 

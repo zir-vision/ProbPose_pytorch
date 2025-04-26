@@ -11,6 +11,7 @@ def to_numpy(tensor: Tensor) -> np.ndarray:
         tensor = tensor.cpu()
     return tensor.detach().numpy()
 
+
 @dataclass
 class ProbPoseGroundTruth:
     heatmaps: np.ndarray
@@ -19,4 +20,3 @@ class ProbPoseGroundTruth:
     keypoints_visible: np.ndarray
     # whether the keypoint is visible, in coco visibility: v == 1
     keypoints_visibility: np.ndarray
-

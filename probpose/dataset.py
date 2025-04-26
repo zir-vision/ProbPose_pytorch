@@ -14,6 +14,7 @@ from torchvision.transforms import v2
 from probpose.util import ProbPoseGroundTruth
 from probpose.codec import Codec
 
+
 def parse_annotations(split_folder: Path, target_single_class: int | None = None):
     annotations = []
     image_paths = list((split_folder / "images").iterdir())
@@ -138,4 +139,3 @@ class YOLOPoseDataset(Dataset):
             keypoints_visible=kps_visible,
             keypoints_visibility=kps_visibility,
         )
-        

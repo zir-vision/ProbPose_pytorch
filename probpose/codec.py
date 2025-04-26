@@ -275,7 +275,7 @@ class Codec:
         # errors = errors / htm_diagonal
 
         return preds
-    
+
     def decode_heatmap(self, heatmaps: Tensor):
         preds = self.probmap.decode(to_numpy(heatmaps))
         return preds

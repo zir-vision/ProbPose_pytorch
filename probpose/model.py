@@ -1,5 +1,6 @@
 from torch import nn, Tensor
 
+
 class ProbPoseModel(nn.Module):
     def __init__(self, backbone, head):
         super(ProbPoseModel, self).__init__()

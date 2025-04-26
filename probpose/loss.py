@@ -5,8 +5,14 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 from probpose.codec import Codec
-from probpose.heatmap import _calc_distances, _distance_acc, get_heatmap_expected_value, get_heatmap_maximum
+from probpose.heatmap import (
+    _calc_distances,
+    _distance_acc,
+    get_heatmap_expected_value,
+    get_heatmap_maximum,
+)
 from probpose.util import ProbPoseGroundTruth, to_numpy
+
 
 class KeypointMSELoss(nn.Module):
     """MSE loss for heatmaps.
@@ -22,22 +28,26 @@ class KeypointMSELoss(nn.Module):
         loss_weight (float): Weight of the loss. Defaults to 1.0
     """
 
-    def __init__(self,
-                 use_target_weight: bool = False,
-                 skip_empty_channel: bool = False,
-                 loss_weight: float = 1.):
+    def __init__(
+        self,
+        use_target_weight: bool = False,
+        skip_empty_channel: bool = False,
+        loss_weight: float = 1.0,
+    ):
         super().__init__()
         self.use_target_weight = use_target_weight
         self.skip_empty_channel = skip_empty_channel
         self.loss_weight = loss_weight
 
-    def forward(self,
-                output: Tensor,
-                target: Tensor,
-                target_weights: Tensor | None = None,
-                mask: Tensor | None = None,
-                per_keypoint: bool = False,
-                per_pixel: bool = False) -> Tensor:
+    def forward(
+        self,
+        output: Tensor,
+        target: Tensor,
+        target_weights: Tensor | None = None,
+        mask: Tensor | None = None,
+        per_keypoint: bool = False,
+        per_pixel: bool = False,
+    ) -> Tensor:
         """Forward function of loss.
 
         Note:
@@ -61,9 +71,9 @@ class KeypointMSELoss(nn.Module):
         """
 
         _mask = self._get_mask(target, target_weights, mask)
-        
-        _loss = F.mse_loss(output, target, reduction='none')
-        
+
+        _loss = F.mse_loss(output, target, reduction="none")
+
         if _mask is not None:
             loss = _loss * _mask
 
@@ -76,8 +86,9 @@ class KeypointMSELoss(nn.Module):
 
         return loss * self.loss_weight
 
-    def _get_mask(self, target: Tensor, target_weights: Tensor | None,
-                  mask: Tensor | None) -> Tensor | None:
+    def _get_mask(
+        self, target: Tensor, target_weights: Tensor | None, mask: Tensor | None
+    ) -> Tensor | None:
         """Generate the heatmap mask w.r.t. the given mask, target weight and
         `skip_empty_channel` setting.
 
@@ -88,23 +99,23 @@ class KeypointMSELoss(nn.Module):
         # Given spatial mask
         if mask is not None:
             # check mask has matching type with target
-            assert (mask.ndim == target.ndim and all(
-                d_m == d_t or d_m == 1
-                for d_m, d_t in zip(mask.shape, target.shape))), (
-                    f'mask and target have mismatched shapes {mask.shape} v.s.'
-                    f'{target.shape}')
+            assert mask.ndim == target.ndim and all(
+                d_m == d_t or d_m == 1 for d_m, d_t in zip(mask.shape, target.shape)
+            ), f"mask and target have mismatched shapes {mask.shape} v.s.{target.shape}"
 
         # Mask by target weights (keypoint-wise mask)
         if target_weights is not None:
             # check target weight has matching shape with target
-            assert (target_weights.ndim in (2, 4) and target_weights.shape
-                    == target.shape[:target_weights.ndim]), (
-                        'target_weights and target have mismatched shapes '
-                        f'{target_weights.shape} v.s. {target.shape}')
+            assert (
+                target_weights.ndim in (2, 4)
+                and target_weights.shape == target.shape[: target_weights.ndim]
+            ), (
+                "target_weights and target have mismatched shapes "
+                f"{target_weights.shape} v.s. {target.shape}"
+            )
 
             ndim_pad = target.ndim - target_weights.ndim
-            _mask = target_weights.view(target_weights.shape +
-                                        (1, ) * ndim_pad)
+            _mask = target_weights.view(target_weights.shape + (1,) * ndim_pad)
 
             if mask is None:
                 mask = _mask
@@ -115,7 +126,7 @@ class KeypointMSELoss(nn.Module):
         if self.skip_empty_channel:
             _mask = (target != 0).flatten(2).any(dim=2)
             ndim_pad = target.ndim - _mask.ndim
-            _mask = _mask.view(_mask.shape + (1, ) * ndim_pad)
+            _mask = _mask.view(_mask.shape + (1,) * ndim_pad)
 
             if mask is None:
                 mask = _mask
@@ -123,6 +134,8 @@ class KeypointMSELoss(nn.Module):
                 mask = mask * _mask
 
         return mask
+
+
 class BCELoss(nn.Module):
     """Binary Cross Entropy loss.
 
@@ -135,22 +148,29 @@ class BCELoss(nn.Module):
             before output. Defaults to False.
     """
 
-    def __init__(self,
-                 use_target_weight=False,
-                 loss_weight=1.,
-                 reduction='mean',
-                 use_sigmoid=False):
+    def __init__(
+        self,
+        use_target_weight=False,
+        loss_weight=1.0,
+        reduction="mean",
+        use_sigmoid=False,
+    ):
         super().__init__()
 
-        assert reduction in ('mean', 'sum', 'none'), f'the argument ' \
-            f'`reduction` should be either \'mean\', \'sum\' or \'none\', ' \
-            f'but got {reduction}'
+        assert reduction in ("mean", "sum", "none"), (
+            f"the argument "
+            f"`reduction` should be either 'mean', 'sum' or 'none', "
+            f"but got {reduction}"
+        )
 
         self.reduction = reduction
         self.use_sigmoid = use_sigmoid
-        criterion = F.binary_cross_entropy if use_sigmoid \
+        criterion = (
+            F.binary_cross_entropy
+            if use_sigmoid
             else F.binary_cross_entropy_with_logits
-        self.criterion = partial(criterion, reduction='none')
+        )
+        self.criterion = partial(criterion, reduction="none")
         self.use_target_weight = use_target_weight
         self.loss_weight = loss_weight
 
@@ -173,20 +193,22 @@ class BCELoss(nn.Module):
             loss = self.criterion(output, target)
             if target_weight.dim() == 1:
                 target_weight = target_weight[:, None]
-            loss = (loss * target_weight)
+            loss = loss * target_weight
         else:
             loss = self.criterion(output, target)
 
-        if self.reduction == 'sum':
+        if self.reduction == "sum":
             loss = loss.sum()
-        elif self.reduction == 'mean':
+        elif self.reduction == "mean":
             loss = loss.mean()
 
         return loss * self.loss_weight
+
+
 class MSELoss(nn.Module):
     """MSE loss for coordinate regression."""
 
-    def __init__(self, use_target_weight=False, loss_weight=1.):
+    def __init__(self, use_target_weight=False, loss_weight=1.0):
         super().__init__()
         self.criterion = F.mse_loss
         self.use_target_weight = use_target_weight
@@ -208,12 +230,13 @@ class MSELoss(nn.Module):
 
         if self.use_target_weight:
             assert target_weight is not None
-            loss = self.criterion(output * target_weight,
-                                  target * target_weight)
+            loss = self.criterion(output * target_weight, target * target_weight)
         else:
             loss = self.criterion(output, target)
 
         return loss * self.loss_weight
+
+
 class L1LogLoss(nn.Module):
     """L1LogLoss loss.
 
@@ -223,7 +246,7 @@ class L1LogLoss(nn.Module):
         loss_weight (float): Weight of the loss. Default: 1.0.
     """
 
-    def __init__(self, use_target_weight=False, loss_weight=1.):
+    def __init__(self, use_target_weight=False, loss_weight=1.0):
         super().__init__()
         self.criterion = F.smooth_l1_loss
         self.use_target_weight = use_target_weight
@@ -254,8 +277,7 @@ class L1LogLoss(nn.Module):
             for i in range(output.ndim - target_weight.ndim):
                 target_weight = target_weight.unsqueeze(-1)
 
-            loss = self.criterion(output * target_weight,
-                                  target * target_weight)
+            loss = self.criterion(output * target_weight, target * target_weight)
         else:
             loss = self.criterion(output, target)
 
@@ -466,7 +488,11 @@ class ProbPoseLoss(nn.Module):
         return target_errors
 
     def _oks_from_heatmaps(
-        self, gt_heatmaps: Tensor, dt_heatmaps: Tensor, weight: Tensor, heatmap_size: Sequence[int] = (48, 64)
+        self,
+        gt_heatmaps: Tensor,
+        dt_heatmaps: Tensor,
+        weight: Tensor,
+        heatmap_size: Sequence[int] = (48, 64),
     ) -> Tensor:
         """Calculate the OKS from heatmaps.
 
@@ -539,7 +565,9 @@ class ProbPoseLoss(nn.Module):
                 "area": gt_bbox[2] * gt_bbox[3],
             }
             # Changed for per-keypoint OKS
-            oks = compute_oks(gt, dt, sigmas=self.codec.sigmas, use_area=False, per_kpt=True)
+            oks = compute_oks(
+                gt, dt, sigmas=self.codec.sigmas, use_area=False, per_kpt=True
+            )
             target_oks.append(oks)
             oks_weights.append(1)
 
@@ -776,4 +804,3 @@ def keypoint_pck_accuracy(
     cnt = len(valid_acc)
     avg_acc = valid_acc.mean() if cnt > 0 else 0.0
     return acc, avg_acc, cnt
-
