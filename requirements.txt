@@ -1,0 +1,8 @@
+torch==2.7.0
+numpy==2.2.5
+timm==1.0.15
+sparsemax==0.1.9
+opencv-python==4.11.0.86
+pymage_size==1.7.1
+rich==14.0.0
+einops==0.8.1
