@@ -135,7 +135,7 @@ class YOLOPoseDataset(Dataset):
         kps = kps[:, :, :2]
         heatmaps, in_image = self.codec.encode(kps, kps_visible)
 
-        return img, ProbPoseGroundTruth(
+        return img, dict(
             heatmaps=heatmaps,
             in_image=in_image,
             keypoints_visible=kps_visible,

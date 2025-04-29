@@ -15,9 +15,14 @@ from probpose.heatmap import (
 )
 from probpose.util import ProbPoseGroundTruth, to_numpy
 
+class OKSHeatmapLoss(nn.Module):
+    """Loss that maximizes expected Object Keypoint Similarity (OKS) score.
 
-class KeypointMSELoss(nn.Module):
-    """MSE loss for heatmaps.
+    This loss computes the expected OKS by multiplying probability maps with OKS
+    maps and maximizes the OKS score by minimizing (1-OKS). The approach was
+    introduced in "ProbPose: A Probabilistic Approach to 2D Human Pose Estimation"
+    by Purkrabek et al. in 2025.
+    See https://arxiv.org/abs/2412.02254 for more details.
 
     Args:
         use_target_weight (bool): Option to use weighted MSE loss.
@@ -30,26 +35,30 @@ class KeypointMSELoss(nn.Module):
         loss_weight (float): Weight of the loss. Defaults to 1.0
     """
 
-    def __init__(
-        self,
-        use_target_weight: bool = False,
-        skip_empty_channel: bool = False,
-        loss_weight: float = 1.0,
-    ):
+    def __init__(self,
+                 use_target_weight: bool = False,
+                 skip_empty_channel: bool = False,
+                 smoothing_weight: float = 0.2, 
+                 gaussian_weight: float = 0.0, 
+                 loss_weight: float = 1.,
+                 oks_type: str = "minus"):
         super().__init__()
         self.use_target_weight = use_target_weight
         self.skip_empty_channel = skip_empty_channel
         self.loss_weight = loss_weight
+        self.smoothing_weight = smoothing_weight
+        self.gaussian_weight = gaussian_weight
+        self.oks_type = oks_type.lower()
 
-    def forward(
-        self,
-        output: Tensor,
-        target: Tensor,
-        target_weights: Tensor | None = None,
-        mask: Tensor | None = None,
-        per_keypoint: bool = False,
-        per_pixel: bool = False,
-    ) -> Tensor:
+        assert self.oks_type in ["minus", "plus", "both"]
+
+    def forward(self,
+                output: Tensor,
+                target: Tensor,
+                target_weights: Tensor | None = None,
+                mask: Tensor | None = None,
+                per_pixel: bool = False,
+                per_keypoint: bool = False) -> Tensor:
         """Forward function of loss.
 
         Note:
@@ -72,25 +81,68 @@ class KeypointMSELoss(nn.Module):
             Tensor: The calculated loss.
         """
 
+        assert target.max() <= 1, 'target should be normalized'
+        assert target.min() >= 0, 'target should be normalized'
+
+        B, K, H, W = output.shape
+
         _mask = self._get_mask(target, target_weights, mask)
+        
+        oks_minus = output * (1-target)
+        oks_plus = (1-output) * (target)
+        if self.oks_type == "both":
+            oks = (oks_minus + oks_plus) / 2
+        elif self.oks_type == "minus":
+            oks = oks_minus
+        elif self.oks_type == "plus":
+            oks = oks_plus
+        else:
+            raise ValueError(f"oks_type {self.oks_type} not recognized")
+        
+        mse = F.mse_loss(output, target, reduction='none')
 
-        _loss = F.mse_loss(output, target, reduction="none")
-
+        # Smoothness loss
+        sobel_x = torch.tensor([[1, 0, -1], [2, 0, -2], [1, 0, -1]], dtype=torch.float32).view(1, 1, 3, 3).to(output.device)
+        sobel_y = torch.tensor([[1, 2, 1], [0, 0, 0], [-1, -2, -1]], dtype=torch.float32).view(1, 1, 3, 3).to(output.device)
+        gradient_x = F.conv2d(output.reshape(B*K, 1, H, W), sobel_x, padding='same')
+        gradient_y = F.conv2d(output.reshape(B*K, 1, H, W), sobel_y, padding='same')
+        gradient = (gradient_x**2 + gradient_y**2).reshape(B, K, H, W)
+        
         if _mask is not None:
-            loss = _loss * _mask
+            oks = oks * _mask
+            mse = mse * _mask
+            gradient = gradient * _mask
+
+            
+        oks_minus_weight = (
+            1 - self.smoothing_weight - self.gaussian_weight
+        )
 
         if per_pixel:
-            pass
+            loss = (
+                self.smoothing_weight * gradient +
+                oks_minus_weight * oks +
+                self.gaussian_weight * mse
+            )
         elif per_keypoint:
-            loss = loss.mean(dim=(2, 3))
+            max_gradient, _ = gradient.reshape((B, K, H*W)).max(dim=-1)
+            loss = (
+                oks_minus_weight * oks.sum(dim=(2, 3)) + 
+                self.smoothing_weight * max_gradient +
+                self.gaussian_weight * mse.mean(dim=(2, 3))
+            )
         else:
-            loss = loss.mean()
-
+            max_gradient, _ = gradient.reshape((B, K, H*W)).max(dim=-1)
+            loss = (
+                oks_minus_weight * oks.sum(dim=(2, 3)) + 
+                self.smoothing_weight * max_gradient +
+                self.gaussian_weight * mse.mean(dim=(2, 3))
+            ).mean()
+            
         return loss * self.loss_weight
 
-    def _get_mask(
-        self, target: Tensor, target_weights: Tensor | None, mask: Tensor | None
-    ) -> Tensor | None:
+    def _get_mask(self, target: Tensor, target_weights: Tensor | None,
+                  mask: Tensor | None) -> Tensor | None:
         """Generate the heatmap mask w.r.t. the given mask, target weight and
         `skip_empty_channel` setting.
 
@@ -101,23 +153,23 @@ class KeypointMSELoss(nn.Module):
         # Given spatial mask
         if mask is not None:
             # check mask has matching type with target
-            assert mask.ndim == target.ndim and all(
-                d_m == d_t or d_m == 1 for d_m, d_t in zip(mask.shape, target.shape)
-            ), f"mask and target have mismatched shapes {mask.shape} v.s.{target.shape}"
+            assert (mask.ndim == target.ndim and all(
+                d_m == d_t or d_m == 1
+                for d_m, d_t in zip(mask.shape, target.shape))), (
+                    f'mask and target have mismatched shapes {mask.shape} v.s.'
+                    f'{target.shape}')
 
         # Mask by target weights (keypoint-wise mask)
         if target_weights is not None:
             # check target weight has matching shape with target
-            assert (
-                target_weights.ndim in (2, 4)
-                and target_weights.shape == target.shape[: target_weights.ndim]
-            ), (
-                "target_weights and target have mismatched shapes "
-                f"{target_weights.shape} v.s. {target.shape}"
-            )
+            assert (target_weights.ndim in (2, 4) and target_weights.shape
+                    == target.shape[:target_weights.ndim]), (
+                        'target_weights and target have mismatched shapes '
+                        f'{target_weights.shape} v.s. {target.shape}')
 
             ndim_pad = target.ndim - target_weights.ndim
-            _mask = target_weights.view(target_weights.shape + (1,) * ndim_pad)
+            _mask = target_weights.view(target_weights.shape +
+                                        (1, ) * ndim_pad)
 
             if mask is None:
                 mask = _mask
@@ -128,7 +180,7 @@ class KeypointMSELoss(nn.Module):
         if self.skip_empty_channel:
             _mask = (target != 0).flatten(2).any(dim=2)
             ndim_pad = target.ndim - _mask.ndim
-            _mask = _mask.view(_mask.shape + (1,) * ndim_pad)
+            _mask = _mask.view(_mask.shape + (1, ) * ndim_pad)
 
             if mask is None:
                 mask = _mask
@@ -291,38 +343,41 @@ class ProbPoseLoss(nn.Module):
     def __init__(self, codec: Codec):
         super().__init__()
         self.codec = codec
-        self.keypoint_loss_module = KeypointMSELoss(use_target_weight=True)
+        self.keypoint_loss_module = OKSHeatmapLoss(use_target_weight=True, smoothing_weight=0.35)
         self.probability_loss_module = BCELoss(use_target_weight=True)
         self.visibility_loss_module = BCELoss(use_target_weight=True)
         self.oks_loss_module = MSELoss(use_target_weight=True)
-        self.error_loss_module = MSELoss(use_target_weight=True)
+        self.error_loss_module = L1LogLoss(use_target_weight=True)
         self.freeze_error = False
         self.freeze_oks = False
 
     def forward(
         self,
-        gt: Sequence[ProbPoseGroundTruth],
+        gt: Sequence[dict[str, Tensor]],
         pred: tuple[Tensor, Tensor, Tensor, Tensor, Tensor],
-        keypoint_weights: Tensor,  # (B, C)
+        keypoint_weights: Tensor | None = None,  # (B, C)
         learn_heatmaps_from_zeros: bool = False,
+
     ):
         dt_heatmaps, dt_probs, dt_vis, dt_oks, dt_errs = pred
         device = dt_heatmaps.device
         B, C, H, W = dt_heatmaps.shape
 
+        if keypoint_weights is None:
+            keypoint_weights = torch.ones((B, C), device=device, dtype=dt_heatmaps.dtype)
+
         # Extract GT data
-        gt_heatmaps = np.stack([d.heatmaps for d in gt])
-        print("gt_heatmaps", gt_heatmaps.shape)
-        gt_heatmaps = torch.tensor(gt_heatmaps, device=device, dtype=dt_heatmaps.dtype)
-        gt_probs = np.stack([d.in_image.astype(int) for d in gt])
-        gt_annotated = np.stack([d.keypoints_visible.astype(int) for d in gt])
-        gt_vis = np.stack([d.keypoints_visibility.astype(int) for d in gt])
+        gt_heatmaps = gt["heatmaps"].to(device, dtype=dt_heatmaps.dtype)
+        gt_probs = gt["in_image"].to(device, dtype=int)
+        gt_annotated = gt["keypoints_visible"].to(device, dtype=int)
+        gt_vis = gt["keypoints_visibility"].to(device, dtype=int)
 
         # Compute GT errors and OKS
         if self.freeze_error:
             gt_errs = torch.zeros((B, C, 1), device=device, dtype=dt_errs.dtype)
         else:
             gt_errs = self._error_from_heatmaps(gt_heatmaps, dt_heatmaps)
+            gt_errs = torch.from_numpy(gt_errs).to(device, dtype=dt_errs.dtype)
         if self.freeze_oks:
             gt_oks = torch.zeros((B, C, 1), device=device, dtype=dt_oks.dtype)
             oks_weight = torch.zeros((B, C, 1), device=device, dtype=dt_oks.dtype)
@@ -333,12 +388,6 @@ class ProbPoseLoss(nn.Module):
                 gt_probs & gt_annotated,
                 heatmap_size=(W, H),
             )
-
-        # Convert everything to tensors
-        gt_probs = torch.tensor(gt_probs, device=device, dtype=dt_probs.dtype)
-        gt_vis = torch.tensor(gt_vis, device=device, dtype=dt_vis.dtype)
-        gt_annotated = torch.tensor(gt_annotated, device=device)
-        gt_errs = torch.tensor(gt_errs, device=device, dtype=dt_errs.dtype)
 
         gt_oks = gt_oks.to(device).to(dt_oks.dtype)
         oks_weight = oks_weight.to(device).to(dt_oks.dtype)
@@ -373,7 +422,7 @@ class ProbPoseLoss(nn.Module):
         )
         heatmap_loss = heatmap_loss_pxl.mean()
         probability_loss = self.probability_loss_module(
-            dt_probs, gt_probs, gt_annotated
+            dt_probs, gt_probs.float(), gt_annotated
         )
 
         # Weight the annotated keypoints such that sum of weights of invisible keypoints is the same as visible ones
@@ -386,8 +435,6 @@ class ProbPoseLoss(nn.Module):
         weighted_annotated_in[visible_in] = (1 / (visible_in.sum() + 1e-10)).to(
             weighted_annotated_in.dtype
         )
-        print(f"{weighted_annotated_in.shape=}")
-        print(f"{weighted_annotated_in=}")
         weighted_annotated_in = (
             weighted_annotated_in
             / weighted_annotated_in[weighted_annotated_in > 0].min()
@@ -395,17 +442,17 @@ class ProbPoseLoss(nn.Module):
         weighted_annotated_in = weighted_annotated_in.to(dt_vis.dtype)
 
         visibility_loss = self.visibility_loss_module(
-            dt_vis, gt_vis, weighted_annotated_in
+            dt_vis, gt_vis.float(), weighted_annotated_in
         )
         oks_loss = self.oks_loss_module(dt_oks, gt_oks, annotated_in)
         error_loss = self.error_loss_module(dt_errs, gt_errs, annotated_in)
 
         losses.update(
-            loss_kpt=heatmap_loss,
-            loss_probability=probability_loss,
-            loss_visibility=visibility_loss,
-            loss_oks=oks_loss,
-            loss_error=error_loss,
+            kpt=heatmap_loss,
+            probability=probability_loss,
+            visibility=visibility_loss,
+            oks=oks_loss,
+            error=error_loss,
         )
 
         # calculate accuracy

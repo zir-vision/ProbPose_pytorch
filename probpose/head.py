@@ -500,12 +500,12 @@ class ProbMapHead(nn.Module):
         oks = self.forward_oks(x)
         error = self.forward_error(x)
 
-        print("Head forward:")
-        print(f"heatmaps: {heatmaps.shape}")
-        print(f"probabilities: {probabilities.shape}")
-        print(f"visibilities: {visibilities.shape}")
-        print(f"oks: {oks.shape}")
-        print(f"error: {error.shape}")
+        # print("Head forward:")
+        # print(f"heatmaps: {heatmaps.shape}")
+        # print(f"probabilities: {probabilities.shape}")
+        # print(f"visibilities: {visibilities.shape}")
+        # print(f"oks: {oks.shape}")
+        # print(f"error: {error.shape}")
 
         return heatmaps, probabilities, visibilities, oks, error
 
