@@ -68,7 +68,7 @@ def parse_annotations(split_folder: Path, target_single_class: int | None = None
     return annotations
 
 
-def scale_box(image: PIL.Image.Image, bbox, size: tuple[int, int], kps):
+def scale_box(image: PIL.Image.Image, bbox, image_size: tuple[int, int], heatmap_size: tuple[int, int], kps: np.ndarray):
     """
     Scale the bounding box and keypoints to the exact target size.
     """
@@ -80,19 +80,14 @@ def scale_box(image: PIL.Image.Image, bbox, size: tuple[int, int], kps):
             bbox[1] + bbox[3],
         )
     )
-    cropped = cropped.resize(size, PIL.Image.LANCZOS)
-    scale_x = size[0] / bbox[2]
-    scale_y = size[1] / bbox[3]
-    new_kps = []
-    for k in kps:
-        new_kps.append(
-            [
-                (k[0] - bbox[0]) * scale_x,
-                (k[1] - bbox[1]) * scale_y,
-                k[2],
-            ]
-        )
-    return cropped, new_kps
+    scaled = cropped.resize(
+        image_size,
+        resample=PIL.Image.LANCZOS,
+    )
+    # Scale the keypoints to the heatmap size
+    kps[:, 0] = (kps[:, 0] - bbox[0]) / bbox[2] * heatmap_size[0]
+    kps[:, 1] = (kps[:, 1] - bbox[1]) / bbox[3] * heatmap_size[1]
+    return scaled, kps
 
 
 class YOLOPoseDataset(Dataset):
@@ -106,7 +101,6 @@ class YOLOPoseDataset(Dataset):
     ):
         self.root = root
         self.split = split
-        self.img_size = img_size
         self.codec = codec
         self.target_single_class = target_single_class
         self.annotations = parse_annotations(root / split, target_single_class)
@@ -125,14 +119,13 @@ class YOLOPoseDataset(Dataset):
         bbox = self.annotations[idx]["bbox"]
         kps = self.annotations[idx]["keypoints"]
 
-        img, kps = scale_box(img, bbox, self.img_size, kps)
+        img, kps = scale_box(img, bbox, self.codec.input_size, self.codec.heatmap_size, np.array(kps, dtype=np.float32))
         img = self.transform(img)
-        kps = np.array(kps, dtype=np.float32)
         kps = kps[None, :, :]
         kps_visible = kps[:, :, 2] == 2
         kps_visibility = np.minimum(kps[:, :, 2], 1)
-
         kps = kps[:, :, :2]
+
         heatmaps, in_image = self.codec.encode(kps, kps_visible)
 
         return img, dict(

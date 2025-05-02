@@ -6,3 +6,4 @@ opencv-python==4.11.0.86
 pymage_size==1.7.1
 rich==14.0.0
 einops==0.8.1
+tensorboard==2.19.0

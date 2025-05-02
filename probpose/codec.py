@@ -56,7 +56,6 @@ def generate_probmaps(
         dx = x_idx - keypoints[n, k, 0]
         dy = y_idx - keypoints[n, k, 1]
         dist = np.sqrt(dx**2 + dy**2)
-
         vars = (kpt_sigma * 2) ** 2
         s = vars * bbox_area * 2
         s = np.clip(s, 0.55, 3.0)
@@ -66,7 +65,6 @@ def generate_probmaps(
         oks_map = np.exp(-e_map)
 
         keypoint_weights[n, k] = (oks_map.max() > 0).astype(int)
-
         heatmaps[k] = oks_map
     return heatmaps, keypoint_weights
 

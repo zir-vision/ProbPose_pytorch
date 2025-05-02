@@ -193,12 +193,107 @@ def _prepare_oks_kernels(K, H, W, kpt_sigmas: np.ndarray):
 
     return kernels
 
+def pad_scipy_reflect_vectorized(input_tensor: torch.Tensor, padding: tuple[int, int, int, int]) -> torch.Tensor:
+    """
+    Manually implements padding equivalent to SciPy's 'reflect' mode using
+    vectorized PyTorch operations (slicing, flip, cat).
+
+    SciPy 'reflect': Extends by reflecting about the center of the edge pixels.
+
+    Args:
+        input_tensor (torch.Tensor): Input tensor (N, C, H, W).
+        padding (tuple[int, int, int, int]): Padding tuple (pad_left, pad_right, pad_top, pad_bottom).
+
+    Returns:
+        torch.Tensor: Padded tensor.
+    """
+    N, C, H, W = input_tensor.shape
+    pad_left, pad_right, pad_top, pad_bottom = padding
+
+    # --- Vertical padding ---
+    if pad_top > 0:
+        top_slice = input_tensor[..., 0:pad_top, :]
+        top_pad = top_slice.flip(dims=[-2])
+    else: top_pad = torch.empty((N, C, 0, W), dtype=input_tensor.dtype, device=input_tensor.device) # Handle 0 padding
+
+    if pad_bottom > 0:
+        bottom_slice = input_tensor[..., H-pad_bottom:H, :]
+        bottom_pad = bottom_slice.flip(dims=[-2])
+    else: bottom_pad = torch.empty((N, C, 0, W), dtype=input_tensor.dtype, device=input_tensor.device)
+
+    vert_padded = torch.cat([top_pad, input_tensor, bottom_pad], dim=-2) # dim=-2 is Height
+
+    # --- Horizontal padding (using the vertically padded tensor) ---
+    # Recalculate height for slicing after vertical padding
+    H_padded = vert_padded.shape[-2]
+
+    if pad_left > 0:
+        left_slice = vert_padded[..., :, 0:pad_left]
+        left_pad = left_slice.flip(dims=[-1])
+    else: left_pad = torch.empty((N, C, H_padded, 0), dtype=input_tensor.dtype, device=input_tensor.device)
+
+    if pad_right > 0:
+        right_slice = vert_padded[..., :, W-pad_right:W]
+        right_pad = right_slice.flip(dims=[-1])
+    else: right_pad = torch.empty((N, C, H_padded, 0), dtype=input_tensor.dtype, device=input_tensor.device)
+
+    output_padded = torch.cat([left_pad, vert_padded, right_pad], dim=-1) # dim=-1 is Width
+
+    return output_padded
+
+
+def scipy_convolve2d_reflect_pytorch(input_tensor: torch.Tensor,
+                                     kernel_tensor: torch.Tensor,
+                                     padding_func=pad_scipy_reflect_vectorized) -> torch.Tensor:
+    """
+    Performs 2D convolution mimicking scipy.ndimage.convolve(mode='reflect').
+
+    Uses the specified padding function (defaults to vectorized version) and
+    flips the kernel for true convolution.
+
+    Args:
+        input_tensor (torch.Tensor): Input tensor (N, C, H, W).
+        kernel_tensor (torch.Tensor): Kernel tensor (Cout, Cin, Kh, Kw).
+        padding_func (callable): The function used for padding.
+
+    Returns:
+        torch.Tensor: Output tensor (N, Cout, H, W).
+    """
+    if not (input_tensor.dim() == 4 and kernel_tensor.dim() == 4):
+         raise ValueError("Input and kernel tensors must be 4D (N, C, H, W) and (Cout, Cin, Kh, Kw)")
+
+    N, C, H, W = input_tensor.shape
+    Cout, Cin, Kh, Kw = kernel_tensor.shape
+
+    if C != Cin:
+         raise ValueError(f"Input channels ({C}) must match kernel input channels ({Cin})")
+
+    # 1. Calculate Padding Amount
+    # Handle non-square kernels if necessary, but assume square for simplicity now
+    if Kh % 2 == 0 or Kw % 2 == 0:
+        print("Warning: Kernel dimensions should be odd for standard centered padding.")
+    pad_h = Kh // 2
+    pad_w = Kw // 2
+    padding_dims = (pad_w, pad_w, pad_h, pad_h) # (left, right, top, bottom)
+
+    # 2. Pad the input tensor using the specified padding function
+    input_padded = padding_func(input_tensor, padding_dims)
+
+    # 3. Flip the kernel for true convolution.
+    kernel_flipped = kernel_tensor.flip(-1).flip(-2)
+
+    # 4. Apply F.conv2d (cross-correlation) with padding=0.
+    output = F.conv2d(input_padded, kernel_flipped, padding=0, stride=1, dilation=1)
+
+    return output
+
 
 def get_heatmap_expected_value(
     heatmaps: np.ndarray,
     sigmas: np.ndarray,
     parzen_size: float = 0.1,
     return_heatmap: bool = False,
+    backend: str = "scipy",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Get maximum response location and value from heatmaps.
 
@@ -239,26 +334,32 @@ def get_heatmap_expected_value(
 
     heatmaps_convolved = np.zeros_like(heatmaps_flatten)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cpu")
     for k in range(K):
         htm_flat = heatmaps_flatten[:, k, :, :].reshape(B, H, W)
-        htm_flat_torch = (
-            torch.from_numpy(htm_flat)
-            .unsqueeze(1)
-            .to(device=device, dtype=torch.float32, non_blocking=True)
-        )  # Shape: (B, 1, H, W)
-        kernel = KERNELS[k]
-        kernel_torch = (
-            torch.from_numpy(kernel)
-            .unsqueeze(1)
-            .to(device=device, dtype=torch.float32, non_blocking=True)
-        )  # Shape: (1, 1, kernel_size, kernel_size)
-        kernel_flipped = torch.flip(kernel_torch, dims=(-1, -2))
-        padding_size = (kernel.shape[-1] - 1) // 2
+        if backend == "torch":
+            htm_flat_torch = (
+                torch.from_numpy(htm_flat)
+                .unsqueeze(1)
+                .to(device=device, dtype=torch.float64)
+            )  # Shape: (B, 1, H, W)
+            kernel = KERNELS[k]
+            kernel_torch = (
+                torch.from_numpy(kernel)
+                .flip(-1)
+                .flip(-2)
+                .unsqueeze(1)
+                .to(device=device, dtype=torch.float64)
+            )  # Shape: (1, 1, kernel_size, kernel_size)
 
-        result_torch = F.conv2d(
-            htm_flat_torch, kernel_flipped, padding=padding_size, groups=1
-        )
-        htm_conv = to_numpy(result_torch)
+         
+            result_torch = scipy_convolve2d_reflect_pytorch(
+                htm_flat_torch, kernel_torch
+            )
+            htm_conv = to_numpy(result_torch)
+        else:
+            from scipy.ndimage import convolve
+            htm_conv = convolve(htm_flat, KERNELS[k], mode='reflect').reshape(B, 1, H, W)
 
         heatmaps_convolved[:, k, :, :] = htm_conv
 
