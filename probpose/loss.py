@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from probpose.codec import Codec
+from probpose.codec import ArgMaxProbMap, Codec
 from probpose.heatmap import (
     _calc_distances,
     _distance_acc,
@@ -80,14 +80,15 @@ class OKSHeatmapLoss(nn.Module):
         Returns:
             Tensor: The calculated loss.
         """
-
+        # print_tensor_stats(output)
+        # print_tensor_stats(target)
         assert target.max() <= 1, 'target should be normalized'
         assert target.min() >= 0, 'target should be normalized'
 
         B, K, H, W = output.shape
 
         _mask = self._get_mask(target, target_weights, mask)
-        
+        # print(f"{_mask=}")
         oks_minus = output * (1-target)
         oks_plus = (1-output) * (target)
         if self.oks_type == "both":
@@ -98,7 +99,7 @@ class OKSHeatmapLoss(nn.Module):
             oks = oks_plus
         else:
             raise ValueError(f"oks_type {self.oks_type} not recognized")
-        
+
         mse = F.mse_loss(output, target, reduction='none')
 
         # Smoothness loss
@@ -117,7 +118,7 @@ class OKSHeatmapLoss(nn.Module):
         oks_minus_weight = (
             1 - self.smoothing_weight - self.gaussian_weight
         )
-
+        # print_tensor_stats(oks)
         if per_pixel:
             loss = (
                 self.smoothing_weight * gradient +
@@ -340,15 +341,20 @@ class L1LogLoss(nn.Module):
 
 class ProbPoseLoss(nn.Module):
     # TODO: fast_decoder. Argmax thing
-    def __init__(self, codec: Codec):
+    def __init__(self, codec: ArgMaxProbMap, freeze_error: bool = True):
         super().__init__()
         self.codec = codec
-        self.keypoint_loss_module = OKSHeatmapLoss(use_target_weight=True, smoothing_weight=0.35)
+        # self.keypoint_loss_module = KeypointMSELoss(use_target_weight=True)
+        self.keypoint_loss_module = OKSHeatmapLoss(
+            use_target_weight=True,
+            smoothing_weight=0.35,
+            oks_type="minus",
+        )
         self.probability_loss_module = BCELoss(use_target_weight=True)
         self.visibility_loss_module = BCELoss(use_target_weight=True)
         self.oks_loss_module = MSELoss(use_target_weight=True)
         self.error_loss_module = L1LogLoss(use_target_weight=True)
-        self.freeze_error = False
+        self.freeze_error = freeze_error
         self.freeze_oks = False
 
     def forward(
@@ -357,7 +363,7 @@ class ProbPoseLoss(nn.Module):
         pred: tuple[Tensor, Tensor, Tensor, Tensor, Tensor],
         keypoint_weights: Tensor | None = None,  # (B, C)
         learn_heatmaps_from_zeros: bool = False,
-
+        compute_acc: bool = False,
     ):
         dt_heatmaps, dt_probs, dt_vis, dt_oks, dt_errs = pred
         device = dt_heatmaps.device
@@ -456,45 +462,48 @@ class ProbPoseLoss(nn.Module):
         )
 
         # calculate accuracy
-        # if train_cfg.get("compute_acc", True):
-        #     acc_pose = self.get_pose_accuracy(
-        #         dt_heatmaps, gt_heatmaps, keypoint_weights > 0.5
-        #     )
-        #     losses.update(acc_pose=acc_pose)
+        if compute_acc:
+            acc_pose = self.get_pose_accuracy(
+                dt_heatmaps, gt_heatmaps, keypoint_weights > 0.5
+            )
 
-        #     # Calculate the best binary accuracy for probability
-        #     acc_prob, _ = self.get_binary_accuracy(
-        #         dt_probs,
-        #         gt_probs,
-        #         gt_annotated > 0.5,
-        #         force_balanced=True,
-        #     )
-        #     losses.update(acc_prob=acc_prob)
+            # Calculate the best binary accuracy for probability
+            acc_prob, _ = self.get_binary_accuracy(
+                dt_probs,
+                gt_probs,
+                gt_annotated > 0.5,
+                force_balanced=True,
+            )
 
-        #     # Calculate the best binary accuracy for visibility
-        #     acc_vis, _ = self.get_binary_accuracy(
-        #         dt_vis,
-        #         gt_vis,
-        #         annotated_in > 0.5,
-        #         force_balanced=True,
-        #     )
-        #     losses.update(acc_vis=acc_vis)
+            # Calculate the best binary accuracy for visibility
+            acc_vis, _ = self.get_binary_accuracy(
+                dt_vis,
+                gt_vis,
+                annotated_in > 0.5,
+                force_balanced=True,
+            )
 
-        #     # Calculate the MAE for OKS
-        #     acc_oks = self.get_mae(
-        #         dt_oks,
-        #         gt_oks,
-        #         annotated_in > 0.5,
-        #     )
-        #     losses.update(mae_oks=acc_oks)
+            # Calculate the MAE for OKS
+            acc_oks = self.get_mae(
+                dt_oks,
+                gt_oks,
+                annotated_in > 0.5,
+            )
 
-        #     # Calculate the MAE for euclidean error
-        #     acc_err = self.get_mae(
-        #         dt_errs,
-        #         gt_errs,
-        #         annotated_in > 0.5,
-        #     )
-        #     losses.update(mae_err=acc_err)
+            # Calculate the MAE for euclidean error
+            acc_err = self.get_mae(
+                dt_errs,
+                gt_errs,
+                annotated_in > 0.5,
+            )
+
+            return losses, {
+                "kpt": acc_pose,
+                "probability": acc_prob,
+                "visibility": acc_vis,
+                "oks": acc_oks,
+                "error": acc_err,
+            }
 
         return losses
 
@@ -517,12 +526,12 @@ class ProbPoseLoss(nn.Module):
         dt_coords = np.zeros((B, C, 2))
         for i, (gt_htm, dt_htm) in enumerate(zip(gt_heatmaps, dt_heatmaps)):
             # coords, score = self.fast_decoder.decode(gt_htm)
-            coords, score = self.codec.decode_heatmap(gt_htm)
+            coords, score = self.codec.decode(gt_htm)
             coords = coords.squeeze()
             gt_coords[i, :, :] = coords
 
             # coords, score = self.fast_decoder.decode(dt_htm)
-            coords, score = self.codec.decode_heatmap(dt_htm)
+            coords, score = self.codec.decode(dt_htm)
             coords = coords.squeeze()
             dt_coords[i, :, :] = coords
 
@@ -564,12 +573,12 @@ class ProbPoseLoss(nn.Module):
         dt_coords = np.zeros((B, C, 2))
         for i, (gt_htm, dt_htm) in enumerate(zip(gt_heatmaps, dt_heatmaps)):
             # coords, score = self.fast_decoder.decode(gt_htm)
-            coords, score = self.codec.decode_heatmap(gt_htm)
+            coords, score = self.codec.decode(gt_htm)
             coords = coords.squeeze()
             gt_coords[i, :, :] = coords
 
             # coords, score = self.fast_decoder.decode(dt_htm)
-            coords, score = self.codec.decode_heatmap(dt_htm)
+            coords, score = self.codec.decode(dt_htm)
             coords = coords.squeeze()
             dt_coords[i, :, :] = coords
 

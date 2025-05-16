@@ -229,6 +229,7 @@ class ProbMapHead(nn.Module):
                 in_channels=in_channels,
                 out_channels=out_channels,
                 kernel_size=final_layer_kernel_size,
+                padding=final_layer_kernel_size // 2,
             )
         else:
             self.final_layer = nn.Identity()
@@ -237,7 +238,7 @@ class ProbMapHead(nn.Module):
             self.normalize_layer = nn.Identity()
         else:
             if sparsemax_available:
-                self.normalize_layer = Sparsemax(dim=1)
+                self.normalize_layer = Sparsemax(dim=-1)
             else:
                 raise ImportError(
                     "Sparsemax is not installed. Please install sparsemax to use this feature."
