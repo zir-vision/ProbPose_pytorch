@@ -9,7 +9,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torchvision.ops import MLP
 
 from probpose.backbone import RadioBackbone, ScratchViTBackbone
-from probpose.codec import Codec, ArgMaxProbMap
+from probpose.codec import Codec, ArgMaxProbMap, ProbMap
 from probpose.dataset import YOLOPoseDataset
 from probpose.head import ProbMapHead
 from probpose.loss import ProbPoseLoss
@@ -19,7 +19,6 @@ from probpose.util import ProbPoseGroundTruth
 IMG_SIZE = (384, 384)
 EPOCHS = 200
 VAL_EVERY = 50
-SAVE_EVERY = 50
 TRAIN_BATCH_SIZE = 32
 VAL_BATCH_SIZE = 32
 SAVE_FULL = True
@@ -37,20 +36,19 @@ if __name__ == "__main__":
     if not out_dir.exists():
         out_dir.mkdir(parents=True, exist_ok=True)
     writer = SummaryWriter(out_dir)
-    # backbone = RadioBackbone("radio_v2.5-b")
+    # backbone = RadioBackbone("radio_v2.5-b", MLP(768, [1024, 1024]))
     backbone = ScratchViTBackbone(
         IMG_SIZE,
         16
     )
-    head = ProbMapHead(768, 20, [(4, 4), (2, 2), (2, 2)], (512, 256), (4, 4), final_layer_kernel_size=1, freeze_error=True, normalize=1.0)
+    head = ProbMapHead(384, 20, [(4, 4), (2, 2), (2, 2)], (256, 256), (4, 4), final_layer_kernel_size=1, freeze_error=True, normalize=1.0)
     model = ProbPoseModel(backbone, head).to("cuda")
-    codec = Codec(IMG_SIZE, (96, 96), np.array([0.1] * 20))
-    fast_codec = ArgMaxProbMap(IMG_SIZE, (96, 96), np.array([0.1] * 20))
+    codec = Codec(ProbMap(IMG_SIZE, (96, 96), np.array([0.05] * 20)))
+    fast_codec = Codec(ArgMaxProbMap(IMG_SIZE, (96, 96), np.array([0.05] * 20)))
     loss_fn = ProbPoseLoss(fast_codec, freeze_error=True)
     train_ds = YOLOPoseDataset(
         Path("./data/field-synth-2"),
         "train",
-        IMG_SIZE,
         codec,
     )
     train_loader = DataLoader(
@@ -62,7 +60,6 @@ if __name__ == "__main__":
     val_ds = YOLOPoseDataset(
         Path("./data/field-synth-2"),
         "valid",
-        IMG_SIZE,
         codec,
     )
     val_loader = DataLoader(
@@ -79,7 +76,7 @@ if __name__ == "__main__":
 
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        max_lr=1e-4,
+        max_lr=5e-4,
         steps_per_epoch=len(train_loader),
         epochs=EPOCHS,
         pct_start=0.1,
@@ -87,7 +84,6 @@ if __name__ == "__main__":
     )
     
     for epoch in range(EPOCHS):
-        model.train()
         for i, (img, gt) in enumerate(track(train_loader)):
             step = epoch * len(train_loader) + i
             gt = cast(ProbPoseGroundTruth, gt)
@@ -131,6 +127,7 @@ if __name__ == "__main__":
                 with torch.no_grad():
                     val_losses: list[dict[str, torch.Tensor]] = []
                     val_accuracies: list[dict[str, torch.Tensor]] = []
+                    val_gt_mean_prob = []
                     val_max_heatmap = 0.0
                     for img, gt in val_loader:
                         gt = cast(ProbPoseGroundTruth, gt)
@@ -168,14 +165,16 @@ if __name__ == "__main__":
                             torch.sum(torch.stack([a[k] for a in val_accuracies])) / len(val_accuracies),
                             step,
                         )
+                model.train()
 
-            if i % SAVE_EVERY == 0:
-                torch.save(
-                    head,
-                    out_dir / f"head_epoch_{epoch}_step_{i}.pth",
-                )
-                if SAVE_FULL:
-                    torch.save(
-                        model,
-                        out_dir / f"model_epoch_{epoch}_step_{i}.pth",
-                    )
+        
+        if SAVE_FULL and epoch % 10 == 0:
+            torch.save(
+                model,
+                out_dir / f"model_epoch_{epoch}.pth",
+            )
+        else:
+            torch.save(
+                head,
+                out_dir / f"head_epoch_{epoch}.pth",
+            )

@@ -68,7 +68,7 @@ def parse_annotations(split_folder: Path, target_single_class: int | None = None
     return annotations
 
 
-def scale_box(image: PIL.Image.Image, bbox, image_size: tuple[int, int], heatmap_size: tuple[int, int], kps: np.ndarray):
+def scale_box(image: PIL.Image.Image, bbox, image_size: tuple[int, int], kps: np.ndarray):
     """
     Scale the bounding box and keypoints to the exact target size.
     """
@@ -85,8 +85,8 @@ def scale_box(image: PIL.Image.Image, bbox, image_size: tuple[int, int], heatmap
         resample=PIL.Image.LANCZOS,
     )
     # Scale the keypoints to the heatmap size
-    kps[:, 0] = (kps[:, 0] - bbox[0]) / bbox[2] * heatmap_size[0]
-    kps[:, 1] = (kps[:, 1] - bbox[1]) / bbox[3] * heatmap_size[1]
+    kps[:, 0] = (kps[:, 0] - bbox[0]) / bbox[2] * image_size[0]
+    kps[:, 1] = (kps[:, 1] - bbox[1]) / bbox[3] * image_size[1]
     return scaled, kps
 
 
@@ -95,7 +95,6 @@ class YOLOPoseDataset(Dataset):
         self,
         root: Path,
         split: str,
-        img_size: tuple[int, int],
         codec: Codec,
         target_single_class: int | None = None,
     ):
@@ -119,18 +118,18 @@ class YOLOPoseDataset(Dataset):
         bbox = self.annotations[idx]["bbox"]
         kps = self.annotations[idx]["keypoints"]
 
-        img, kps = scale_box(img, bbox, self.codec.input_size, self.codec.heatmap_size, np.array(kps, dtype=np.float32))
+        img, kps = scale_box(img, bbox, self.codec.probmap.input_size, np.array(kps, dtype=np.float32))
         img = self.transform(img)
         kps = kps[None, :, :]
         kps_visible = kps[:, :, 2] == 2
         kps_visibility = np.minimum(kps[:, :, 2], 1)
         kps = kps[:, :, :2]
 
-        heatmaps, in_image = self.codec.encode(kps, kps_visible)
+        encoded = self.codec.encode(kps, kps_visible)
 
         return img, dict(
-            heatmaps=heatmaps,
-            in_image=in_image,
+            heatmaps=encoded["heatmaps"],
+            in_image=encoded["in_image"],
             keypoints_visible=kps_visible,
             keypoints_visibility=kps_visibility,
         )

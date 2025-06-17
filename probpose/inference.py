@@ -10,7 +10,7 @@ from matplotlib import cm
 from probpose.model import ProbPoseModel
 from probpose.backbone import RadioBackbone
 from probpose.head import ProbMapHead
-from probpose.codec import Codec
+from probpose.codec import Codec, ProbMap
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Inference script for ProbPose")
@@ -69,7 +69,7 @@ if __name__ == "__main__":
         # Load the full model
         model = torch.load(args.model, weights_only=False)
         model = model.to("cuda")
-    codec = Codec(input_size, (96, 96), np.array([0.5] * 20))
+    codec = Codec(ProbMap(input_size, (96, 96), np.array([0.5] * 20)))
     # Load and preprocess the image
     image = PIL.Image.open(args.image).convert("RGB")
     image = image.resize(input_size, PIL.Image.LANCZOS)
@@ -110,5 +110,23 @@ if __name__ == "__main__":
     print("Visibilities:", preds[2])
     print("OKS:", preds[3])
     print("Errors:", preds[4])
+
+    # Draw predictions on the image
+    for i, (keypoints, probabilities) in enumerate(zip(preds[0][0], preds[1][0])):
+        for j, (kp, prob) in enumerate(zip(keypoints, probabilities)):
+            print(f"Keypoint {j}: {kp}, Probability: {prob}")
+            if prob < 0.9:
+                continue
+            x, y = int(kp[0]), int(kp[1])
+            print(f"Keypoint {j}: ({x}, {y}), Probability: {prob:.2f}")
+            if 0 <= x < input_size[0] and 0 <= y < input_size[1]:
+                PIL.ImageDraw.Draw(image).ellipse(
+                    (x - 5, y - 5, x + 5, y + 5), fill=(255, 0, 0)
+                )
+                PIL.ImageDraw.Draw(image).text(
+                    (x + 10, y - 10), f"{j}: {prob:.2f}", fill=(255, 255, 255)
+                )
+    # Save the output image
+    image.save(output_folder / "output_image.png")
 
     

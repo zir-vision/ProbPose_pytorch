@@ -341,17 +341,17 @@ class L1LogLoss(nn.Module):
 
 class ProbPoseLoss(nn.Module):
     # TODO: fast_decoder. Argmax thing
-    def __init__(self, codec: ArgMaxProbMap, freeze_error: bool = True):
+    def __init__(self, codec: Codec, freeze_error: bool = True):
         super().__init__()
         self.codec = codec
         # self.keypoint_loss_module = KeypointMSELoss(use_target_weight=True)
         self.keypoint_loss_module = OKSHeatmapLoss(
             use_target_weight=True,
-            smoothing_weight=0.35,
+            smoothing_weight=0.05,
             oks_type="minus",
         )
-        self.probability_loss_module = BCELoss(use_target_weight=True)
-        self.visibility_loss_module = BCELoss(use_target_weight=True)
+        self.probability_loss_module = BCELoss(use_target_weight=False, use_sigmoid=True)
+        self.visibility_loss_module = BCELoss(use_target_weight=False, use_sigmoid=True)
         self.oks_loss_module = MSELoss(use_target_weight=True)
         self.error_loss_module = L1LogLoss(use_target_weight=True)
         self.freeze_error = freeze_error
@@ -403,7 +403,9 @@ class ProbPoseLoss(nn.Module):
         gt_heatmaps = gt_heatmaps.view((B, C, H, W))
         dt_heatmaps = dt_heatmaps.view((B, C, H, W))
         gt_probs = gt_probs.view((B, C))
+        # print(gt_probs)
         dt_probs = dt_probs.view((B, C))
+        # print(dt_probs)
         gt_vis = gt_vis.view((B, C))
         dt_vis = dt_vis.view((B, C))
         gt_oks = gt_oks.view((B, C))
@@ -428,7 +430,7 @@ class ProbPoseLoss(nn.Module):
         )
         heatmap_loss = heatmap_loss_pxl.mean()
         probability_loss = self.probability_loss_module(
-            dt_probs, gt_probs.float(), gt_annotated
+            dt_probs, gt_probs.float()
         )
 
         # Weight the annotated keypoints such that sum of weights of invisible keypoints is the same as visible ones
@@ -526,12 +528,12 @@ class ProbPoseLoss(nn.Module):
         dt_coords = np.zeros((B, C, 2))
         for i, (gt_htm, dt_htm) in enumerate(zip(gt_heatmaps, dt_heatmaps)):
             # coords, score = self.fast_decoder.decode(gt_htm)
-            coords, score = self.codec.decode(gt_htm)
+            coords, score = self.codec.decode_heatmap(gt_htm)
             coords = coords.squeeze()
             gt_coords[i, :, :] = coords
 
             # coords, score = self.fast_decoder.decode(dt_htm)
-            coords, score = self.codec.decode(dt_htm)
+            coords, score = self.codec.decode_heatmap(dt_htm)
             coords = coords.squeeze()
             dt_coords[i, :, :] = coords
 
@@ -573,12 +575,12 @@ class ProbPoseLoss(nn.Module):
         dt_coords = np.zeros((B, C, 2))
         for i, (gt_htm, dt_htm) in enumerate(zip(gt_heatmaps, dt_heatmaps)):
             # coords, score = self.fast_decoder.decode(gt_htm)
-            coords, score = self.codec.decode(gt_htm)
+            coords, score = self.codec.decode_heatmap(gt_htm)
             coords = coords.squeeze()
             gt_coords[i, :, :] = coords
 
             # coords, score = self.fast_decoder.decode(dt_htm)
-            coords, score = self.codec.decode(dt_htm)
+            coords, score = self.codec.decode_heatmap(dt_htm)
             coords = coords.squeeze()
             dt_coords[i, :, :] = coords
 
@@ -624,7 +626,7 @@ class ProbPoseLoss(nn.Module):
             }
             # Changed for per-keypoint OKS
             oks = compute_oks(
-                gt, dt, sigmas=self.codec.sigmas, use_area=False, per_kpt=True
+                gt, dt, sigmas=self.codec.probmap.sigmas, use_area=False, per_kpt=True
             )
             target_oks.append(oks)
             oks_weights.append(1)

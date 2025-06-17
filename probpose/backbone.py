@@ -27,7 +27,7 @@ class ScratchViTBackbone(torch.nn.Module):
             img_size=input_image_size,
             patch_size=patch_size,
             num_classes=0,
-            embed_dim=768,
+            embed_dim=384,
             class_token=False,
             global_pool=''
         )

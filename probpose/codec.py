@@ -177,16 +177,12 @@ class ProbMap:
 
         heatmaps, keypoint_weights = generate_probmaps(
             heatmap_size=self.heatmap_size,
-            # keypoints=keypoints / self.scale_factor,
-            keypoints=keypoints,
+            keypoints=keypoints / self.scale_factor,
             keypoints_visible=keypoints_visible,
-            keypoints_visibility=keypoints_visibility,
             sigmas=self.sigmas,
             sigma=self.sigma,
-            increase_sigma_with_padding=self.increase_sigma_with_padding,
         )
 
-        print(f"{heatmaps.shape=}")
 
         annotated = keypoints_visible > 0
 
@@ -209,8 +205,7 @@ class ProbMap:
             annotated=annotated,
             in_image=in_image,
             keypoints_scaled=keypoints,
-            # heatmap_keypoints=keypoints / self.scale_factor,
-            heatmap_keypoints=keypoints,
+            heatmap_keypoints=keypoints / self.scale_factor,
             identification_similarity=id_similarity,
         )
 
@@ -239,7 +234,7 @@ class ProbMap:
         keypoints = keypoints[None]
         scores = scores[None]
 
-        # keypoints = keypoints / [W - 1, H - 1] * self.input_size
+        keypoints = keypoints / [W - 1, H - 1] * self.input_size
 
         return keypoints, scores
 
@@ -247,19 +242,9 @@ class ProbMap:
 class Codec:
     def __init__(
         self,
-        input_size: tuple[int, int],
-        heatmap_size: tuple[int, int],
-        sigmas: np.ndarray,
+        probmap,
     ):
-        self.input_size = input_size
-        self.heatmap_size = heatmap_size
-        self.sigmas = sigmas
-        self.sigma = 2.0
-        self.probmap = ProbMap(
-            input_size=input_size,
-            heatmap_size=heatmap_size,
-            sigmas=sigmas,
-        )
+        self.probmap = probmap
 
     def decode(self, pred: tuple[Tensor, Tensor, Tensor, Tensor, Tensor]):
         heatmaps, probabilities, visibilities, oks, errors = pred
@@ -287,70 +272,11 @@ class Codec:
         keypoints_visible: np.ndarray | None = None,
         id_similarity: float | None = 0.0,
     ) -> dict:
-        """Encode keypoints into heatmaps. Note that the original keypoint
-        coordinates should be in the input image space.
-
-        Args:
-            keypoints (np.ndarray): Keypoint coordinates in shape (N, K, D)
-            keypoints_visible (np.ndarray): Keypoint visibilities in shape
-                (N, K)
-            id_similarity (float): The usefulness of the identity information
-                for the whole pose. Defaults to 0.0
-            keypoints_visibility (np.ndarray): The visibility bit for each
-                keypoint (N, K). Defaults to None
-
-        Returns:
-            dict:
-            - heatmap (np.ndarray): The generated heatmap in shape
-                (C_out, H, W) where [W, H] is the `heatmap_size`, and the
-                C_out is the output channel number which depends on the
-                `heatmap_type`. If `heatmap_type=='gaussian'`, C_out equals to
-                keypoint number K; if `heatmap_type=='combined'`, C_out
-                equals to K*3 (x_offset, y_offset and class label)
-            - keypoint_weights (np.ndarray): The target weights in shape
-                (K,)
-        """
-        assert keypoints.shape[0] == 1, (
-            f"{self.__class__.__name__} only support single-instance keypoint encoding"
-        )
-
-        if keypoints_visible is None:
-            keypoints_visible = np.ones(keypoints.shape[:2], dtype=np.float32)
-
-        heatmaps, keypoint_weights = generate_probmaps(
-            heatmap_size=self.heatmap_size,
+        return self.probmap.encode(
             keypoints=keypoints,
             keypoints_visible=keypoints_visible,
-            sigmas=self.sigmas,
-            sigma=self.sigma,
+            id_similarity=id_similarity,
         )
-
-        annotated = keypoints_visible > 0
-
-        in_image = np.logical_and(
-            keypoints[:, :, 0] >= 0,
-            keypoints[:, :, 0] < self.input_size[0],
-        )
-        in_image = np.logical_and(
-            in_image,
-            keypoints[:, :, 1] >= 0,
-        )
-        in_image = np.logical_and(
-            in_image,
-            keypoints[:, :, 1] < self.input_size[1],
-        )
-
-        encoded = dict(
-            heatmaps=heatmaps,
-            keypoint_weights=keypoint_weights,
-            annotated=annotated,
-            in_image=in_image,
-            keypoints_scaled=keypoints,
-            heatmap_keypoints=keypoints,
-            identification_similarity=id_similarity,
-        )
-
-        return heatmaps, in_image
     
 
 
@@ -507,6 +433,8 @@ class ArgMaxProbMap:
         self.heatmap_size = heatmap_size
         self.radius_factor = radius_factor
         self.blur_kernel_size = blur_kernel_size
+        self.scale_factor = ((np.array(input_size) - 1) /
+                             (np.array(heatmap_size) - 1)).astype(np.float32)
         self.increase_sigma_with_padding = increase_sigma_with_padding
         self.sigma = sigma
         self.sigmas = sigmas
@@ -553,7 +481,7 @@ class ArgMaxProbMap:
         
         heatmaps, keypoint_weights = generate_probmaps(
             heatmap_size=self.heatmap_size,
-            keypoints=keypoints,
+            keypoints=keypoints / self.scale_factor,
             keypoints_visible=keypoints_visible,
             sigmas=self.sigmas,
             sigma=self.sigma,)
@@ -582,7 +510,7 @@ class ArgMaxProbMap:
             identification_similarity=id_similarity,
         )
 
-        return heatmaps, in_image
+        return encoded
 
     def decode(self, encoded: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Decode keypoint coordinates from heatmaps. The decoded keypoint
@@ -610,6 +538,6 @@ class ArgMaxProbMap:
         keypoints = refine_keypoints_dark_udp(
             keypoints_max.copy(), heatmaps, blur_kernel_size=self.blur_kernel_size)
 
-        # keypoints = keypoints / [W - 1, H - 1] * self.input_size
+        keypoints = keypoints / [W - 1, H - 1] * self.input_size
 
         return keypoints, scores
